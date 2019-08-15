@@ -160,6 +160,7 @@ func unmarshalBinary(d *TDigest, p []byte) error {
 		return fmt.Errorf("found %d unexpected bytes trailing the tdigest", n)
 	}
 
+	d.Scaler = defaultScaler
 	return nil
 }
 
