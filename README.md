@@ -2,8 +2,8 @@
 
 This is an implementation of Ted Dunning's [t-digest](https://github.com/tdunning/t-digest/) in Go.
 
-The implementation is based off [Derrick Burns' C++ implementation](https://github.com/derrickburns/tdigest).
-The implementation has borrowed some from [Derrick Burns' C++ implementation](https://github.com/spenczar/tdigest).
+The implementation is originally based off [InfluxData's implementation](https://github.com/influxdata/tdigest).
+The implementation has borrowed some from [Spencer Nelson's implementation](https://github.com/spenczar/tdigest).
 
 ## Example
 
@@ -36,8 +36,3 @@ func main() {
 	log.Println("CDF(5) = ", td.CDF(5))
 }
 ```
-
-## TODO
-
-Only the methods for a single TDigest have been implemented.
-The methods to merge two or more existing t-digests into a single t-digest have yet to be implemented.

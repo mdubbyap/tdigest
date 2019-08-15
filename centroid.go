@@ -1,7 +1,9 @@
 package tdigest
 
 import (
+	"bytes"
 	"fmt"
+	"math"
 	"sort"
 )
 
@@ -43,11 +45,76 @@ func (c *Centroid) Add(r Centroid) error {
 // CentroidList is sorted by the Mean of the centroid, ascending.
 type CentroidList []Centroid
 
+func (l CentroidList) MarshalBinary() ([]byte, error) {
+	buf := bytes.NewBuffer(nil)
+	w := &binaryBufferWriter{buf: buf}
+	w.writeValue(centroidmagic)
+	w.writeValue(encodingVersion)
+	w.writeValue(int32(l.Len()))
+	for _, c := range l {
+		w.writeValue(c.Mean)
+		w.writeValue(c.Weight)
+	}
+	if w.err != nil {
+		return nil, w.err
+	}
+	return buf.Bytes(), nil
+}
+
+func UnmarshalCentroidBinary(p []byte) (CentroidList, error) {
+	var (
+		mv int16
+		ev int32
+		n  int32
+	)
+	r := &binaryReader{r: bytes.NewReader(p)}
+	r.readValue(&mv)
+	if r.err != nil {
+		return nil, r.err
+	}
+	if mv != centroidmagic {
+		return nil, fmt.Errorf("data corruption detected: invalid header magic value 0x%04x", mv)
+	}
+	r.readValue(&ev)
+	if r.err != nil {
+		return nil, r.err
+	}
+	if ev != encodingVersion {
+		return nil, fmt.Errorf("data corruption detected: invalid encoding version %d", ev)
+	}
+	r.readValue(&n)
+	l := make(CentroidList, n)
+	for i := 0; i < int(n); i++ {
+		c := Centroid{}
+		r.readValue(&c.Mean)
+		r.readValue(&c.Weight)
+		if r.err != nil {
+			return nil, r.err
+		}
+		if c.Weight < 0 {
+			return nil, fmt.Errorf("data corruption detected: negative count: %f", c.Weight)
+		}
+		if math.IsNaN(c.Mean) {
+			return nil, fmt.Errorf("data corruption detected: NaN mean not permitted")
+		}
+		if math.IsInf(c.Mean, 0) {
+			return nil, fmt.Errorf("data corruption detected: Inf mean not permitted")
+		}
+		l[i] = c
+	}
+	if r.err != nil {
+		return nil, r.err
+	}
+	return l, nil
+}
+
 func (l *CentroidList) Clear() {
 	*l = (*l)[0:0]
 }
 
-func (l CentroidList) Len() int           { return len(l) }
+func (l CentroidList) Len() int {
+	return len(l)
+}
 func (l CentroidList) Less(i, j int) bool { return l[i].Mean < l[j].Mean }
 func (l CentroidList) Swap(i, j int)      { l[i], l[j] = l[j], l[i] }
 

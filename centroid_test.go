@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/mdubbyap/tdigest"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestCentroid_Add(t *testing.T) {
@@ -56,6 +57,7 @@ func TestCentroid_Add(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			c := &tt.c
 			if err := c.Add(tt.r); (err != nil) != tt.wantErr {
@@ -113,10 +115,16 @@ func TestNewCentroidList(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tdigest.NewCentroidList(tt.centroids); !cmp.Equal(tt.want, got) {
 				t.Errorf("NewCentroidList() = -want/+got %s", cmp.Diff(tt.want, got))
 			}
 		})
 	}
+}
+
+func TestCentroid_String(t *testing.T) {
+	c := tdigest.Centroid{Weight: 1, Mean: 7}
+	assert.Equal(t, c.String(), "{mean: 7.000000 weight: 1.000000}")
 }
