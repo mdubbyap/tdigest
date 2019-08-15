@@ -3,11 +3,15 @@ package tdigest
 import (
 	"testing"
 
-	"golang.org/x/exp/rand"
-	"gonum.org/v1/gonum/stat/distuv"
+	"fmt"
 	"math"
 	"reflect"
+	"strconv"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"golang.org/x/exp/rand"
+	"gonum.org/v1/gonum/stat/distuv"
 )
 
 const (
@@ -18,12 +22,30 @@ const (
 	seed = 42
 )
 
-// NormalData is a slice of N random values that are normaly distributed with mean Mu and standard deviation Sigma.
-var NormalData []float64
-var UniformData []float64
-
-var NormalDigest *TDigest
-var UniformDigest *TDigest
+var (
+	// NormalData is a slice of N random values that are normally distributed with mean Mu and standard deviation Sigma.
+	NormalData           []float64
+	UniformData          []float64
+	benchmarkCompression = float64(50)
+	benchmarkMedian      = float64(2.675264e09)
+	benchmarkStdDev      = float64(13.14254e09)
+	benchmarkDecayValue  = 0.9
+	benchmarkDecayEvery  = int32(1000)
+	benchmarks           = []struct {
+		name  string
+		scale scaler
+	}{
+		{name: "k1", scale: &K1{}},
+		{name: "k1_fast", scale: &K1Fast{}},
+		{name: "k1_spliced", scale: &K1Spliced{}},
+		{name: "k1_spliced_fast", scale: &K1SplicedFast{}},
+		{name: "k2", scale: &K2{}},
+		{name: "k2_spliced", scale: &K2Spliced{}},
+		//{name: "k3", scale: &K3{}},
+		{name: "k3_spliced", scale: &K3Spliced{}},
+		{name: "kquadratic", scale: &KQuadratic{}},
+	}
+)
 
 func init() {
 	dist := distuv.Normal{
@@ -34,17 +56,12 @@ func init() {
 	uniform := rand.New(rand.NewSource(seed))
 
 	UniformData = make([]float64, N)
-	UniformDigest = NewWithCompression(1000)
 
 	NormalData = make([]float64, N)
-	NormalDigest = NewWithCompression(1000)
 
 	for i := range NormalData {
 		NormalData[i] = dist.Rand()
-		NormalDigest.Add(NormalData[i], 1)
-
 		UniformData[i] = uniform.Float64() * 100
-		UniformDigest.Add(UniformData[i], 1)
 	}
 }
 
@@ -52,100 +69,44 @@ func TestTdigest_Quantile(t *testing.T) {
 	tests := []struct {
 		name     string
 		data     []float64
-		digest   *TDigest
 		quantile float64
 		want     float64
+		epsilon  float64
 	}{
-		{
-			name:     "increasing",
-			quantile: 0.5,
-			data:     []float64{1, 2, 3, 4, 5},
-			want:     3,
-		},
-		{
-			name:     "data in decreasing order",
-			quantile: 0.25,
-			data:     []float64{555.349107, 432.842597},
-			want:     432.842597,
-		},
-		{
-			name:     "small",
-			quantile: 0.5,
-			data:     []float64{1, 2, 3, 4, 5, 5, 4, 3, 2, 1},
-			want:     3,
-		},
-		{
-			name:     "small 99 (max)",
-			quantile: 0.99,
-			data:     []float64{1, 2, 3, 4, 5, 5, 4, 3, 2, 1},
-			want:     5,
-		},
-		{
-			name:     "normal 50",
-			quantile: 0.5,
-			digest:   NormalDigest,
-			want:     10.000673533707138,
-		},
-		{
-			name:     "normal 90",
-			quantile: 0.9,
-			digest:   NormalDigest,
-			want:     13.842132136909889,
-		},
-		{
-			name:     "uniform 50",
-			quantile: 0.5,
-			digest:   UniformDigest,
-			want:     49.992502345843555,
-		},
-		{
-			name:     "uniform 90",
-			quantile: 0.9,
-			digest:   UniformDigest,
-			want:     89.98281777095822,
-		},
-		{
-			name:     "uniform 99",
-			quantile: 0.99,
-			digest:   UniformDigest,
-			want:     98.98503400959562,
-		},
-		{
-			name:     "uniform 99.9",
-			quantile: 0.999,
-			digest:   UniformDigest,
-			want:     99.90103781043621,
-		},
+		{name: "increasing", quantile: 0.5, data: []float64{1, 2, 3, 4, 5}, want: 3},
+		{name: "data in decreasing order", quantile: 0.25, data: []float64{555.349107, 432.842597}, want: 432.842597},
+		{name: "small", quantile: 0.5, data: []float64{1, 2, 3, 4, 5, 5, 4, 3, 2, 1}, want: 3},
+		{name: "small 99 (max)", quantile: 0.99, data: []float64{1, 2, 3, 4, 5, 5, 4, 3, 2, 1}, want: 5},
+		{name: "normal 50", quantile: 0.5, data: NormalData, want: 10.000744215323294, epsilon: 0.000124},
+		{name: "normal 90", quantile: 0.9, data: NormalData, want: 13.841895725158281, epsilon: 1.6e-05},
+		{name: "uniform 50", quantile: 0.5, data: UniformData, want: 49.992136904768316, epsilon: 0.000207},
+		{name: "uniform 90", quantile: 0.9, data: UniformData, want: 89.98220402280788, epsilon: 4.6e-05},
+		{name: "uniform 99", quantile: 0.99, data: UniformData, want: 98.98511738020078, epsilon: 1.1e-05},
+		{name: "uniform 99.9", quantile: 0.999, data: UniformData, want: 99.90131708898765, epsilon: 2.52e-06},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			td := tt.digest
-			if td == nil {
-				td = NewWithCompression(1000)
+		tt := tt
+		for _, bt := range benchmarks {
+			bt := bt
+			t.Run(tt.name+"-"+bt.name, func(t *testing.T) {
+				td := NewWithCompression(1000)
+				td.Scaler = bt.scale
 				for _, x := range tt.data {
 					td.Add(x, 1)
 				}
-			}
-			got := td.Quantile(tt.quantile)
-			if got != tt.want {
-				t.Errorf("unexpected quantile %f, got %g want %g", tt.quantile, got, tt.want)
-			}
-		})
+				got := td.Quantile(tt.quantile)
+				actual := quantile(tt.quantile, tt.data)
+				assert.InEpsilon(t, tt.want, got, tt.epsilon, "unexpected quantile %f, got %g want %g", tt.quantile, got, tt.want)
+				assert.InEpsilon(t, actual, got, tt.epsilon, "unexpected quantile %f, got %g want %g", tt.quantile, got, tt.want)
+			})
+		}
 	}
 }
 
 func TestClone(t *testing.T) {
 	testcase := func(in *TDigest) func(*testing.T) {
 		return func(t *testing.T) {
-			b, err := in.MarshalBinary()
-			if err != nil {
-				t.Fatalf("MarshalBinary err: %v", err)
-			}
-			out := new(TDigest)
-			err = out.UnmarshalBinary(b)
-			if err != nil {
-				t.Fatalf("UnmarshalBinary err: %v", err)
-			}
+			out := in.Clone()
 			if !reflect.DeepEqual(in, out) {
 				t.Errorf("marshaling round trip resulted in changes")
 				t.Logf("in: %+v", in)
@@ -166,93 +127,43 @@ func TestClone(t *testing.T) {
 
 func TestTdigest_CDFs(t *testing.T) {
 	tests := []struct {
-		name   string
-		data   []float64
-		digest *TDigest
-		cdf    float64
-		want   float64
+		name    string
+		data    []float64
+		cdf     float64
+		want    float64
+		epsilon float64
 	}{
-		{
-			name: "increasing",
-			cdf:  3,
-			data: []float64{1, 2, 3, 4, 5},
-			want: 0.5,
-		},
-		{
-			name: "small",
-			cdf:  4,
-			data: []float64{1, 2, 3, 4, 5, 5, 4, 3, 2, 1},
-			want: 0.75,
-		},
-		{
-			name: "small max",
-			cdf:  5,
-			data: []float64{1, 2, 3, 4, 5, 5, 4, 3, 2, 1},
-			want: 1,
-		},
-		{
-			name: "normal mean",
-			cdf:  10,
-			data: NormalData,
-			want: 0.4999156505250766,
-		},
-		{
-			name: "normal high",
-			cdf:  -100,
-			data: NormalData,
-			want: 0,
-		},
-		{
-			name: "normal low",
-			cdf:  110,
-			data: NormalData,
-			want: 1,
-		},
-		{
-			name: "uniform 50",
-			cdf:  50,
-			data: UniformData,
-			want: 0.5000756133965755,
-		},
-		{
-			name: "uniform min",
-			cdf:  0,
-			data: UniformData,
-			want: 0,
-		},
-		{
-			name: "uniform max",
-			cdf:  100,
-			data: UniformData,
-			want: 1,
-		},
-		{
-			name: "uniform 10",
-			cdf:  10,
-			data: UniformData,
-			want: 0.09987932577650871,
-		},
-		{
-			name: "uniform 90",
-			cdf:  90,
-			data: UniformData,
-			want: 0.9001667885256108,
-		},
+		{name: "increasing", cdf: 3, data: []float64{1, 2, 3, 4, 5}, want: 0.5},
+		{name: "small", cdf: 4, data: []float64{1, 2, 3, 4, 5, 5, 4, 3, 2, 1}, want: 0.7, epsilon: 0.072},
+		{name: "small max", cdf: 5, data: []float64{1, 2, 3, 4, 5, 5, 4, 3, 2, 1}, want: 0.9, epsilon: 0.12},
+		{name: "normal mean", cdf: 10, data: NormalData, want: 0.499925, epsilon: 2.2e-05},
+		{name: "normal high", cdf: -100, data: NormalData, want: 0},
+		{name: "normal low", cdf: 110, data: NormalData, want: 1},
+		{name: "uniform 50", cdf: 50, data: UniformData, want: 0.500068, epsilon: 0.000116},
+		{name: "uniform min", cdf: 0, data: UniformData, want: 0},
+		{name: "uniform max", cdf: 100, data: UniformData, want: 1},
+		{name: "uniform 10", cdf: 10, data: UniformData, want: 0.099872, epsilon: 0.000158},
+		{name: "uniform 90", cdf: 90, data: UniformData, want: 0.900155, epsilon: 3.3e-5},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			td := tt.digest
-			if td == nil {
-				td = NewWithCompression(1000)
+		tt := tt
+		for _, bt := range benchmarks {
+			bt := bt
+			t.Run(tt.name+"-"+bt.name, func(t *testing.T) {
+				td := NewWithCompression(1000)
 				for _, x := range tt.data {
 					td.Add(x, 1)
 				}
-			}
-			got := td.CDF(tt.cdf)
-			if got != tt.want {
-				t.Errorf("unexpected CDF %f, got %g want %g", tt.cdf, got, tt.want)
-			}
-		})
+				got := td.CDF(tt.cdf)
+				actual := cdf(tt.cdf, tt.data)
+				if got != tt.want {
+					assert.InEpsilon(t, tt.want, got, tt.epsilon, "unexpected CDF %f, got %g want %g", tt.cdf, got, tt.want)
+				}
+				if got != actual {
+					assert.InEpsilon(t, actual, got, tt.epsilon, "unexpected CDF %f, got %g want %g", tt.cdf, got, tt.want)
+				}
+			})
+		}
 	}
 }
 
@@ -279,47 +190,68 @@ func TestCloneRoundTrip(t *testing.T) {
 	t.Run("1, 1, 0 input", testcase(d))
 }
 
-var (
-	quantiles            = []float64{0.1, 0.5, 0.9, 0.99, 0.999}
-	benchmarkCompression = float64(500)
-	benchmarkDecayValue  = 0.9
-	benchmarkDecayEvery  = int32(1000)
-)
+func getVal() float64 {
+	return math.Abs(rand.NormFloat64())*benchmarkStdDev + benchmarkMedian
+}
 
-func BenchmarkAdd(b *testing.B) {
-	rand.Seed(uint64(time.Now().Unix()))
-	benchmarks := []struct {
-		name  string
-		scale scaler
-	}{
-		{name: "k1", scale: &K1{}},
+func TestSizesVsCap(t *testing.T) {
+	m := map[string]int{
+		"k1":              312,
+		"k1_fast":         314,
+		"k1_spliced":      252,
+		"k1_spliced_fast": 253,
+		"k2":              325,
+		"k2_spliced":      162,
+		"k3_spliced":      175,
+		"kquadratic":      306,
 	}
-	for _, bm := range benchmarks {
-		b.Run(bm.name, func(b *testing.B) {
+	for _, test := range benchmarks {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
 			td := NewWithDecay(benchmarkCompression, benchmarkDecayValue, benchmarkDecayEvery)
-			b.ResetTimer()
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				td.Add(math.Abs(rand.NormFloat64()), 1.0)
+			td.Scaler = test.scale
+			n := 1000000
+			for i := 0; i < n; i++ {
+				td.Add(getVal(), 1.0)
+			}
+			td.process()
+			fmt.Printf("\t\t\t\t\t\tn: %d len: %d cap: %d\n", n, len(td.processed), cap(td.processed))
+
+			if len(td.processed) > m[test.name] {
+				t.Errorf("unexpected centroid size %d > %d", len(td.processed), m[test.name])
 			}
 		})
 	}
 }
 
-func BenchmarkQuantile(b *testing.B) {
+func BenchmarkMainAdd(b *testing.B) {
 	rand.Seed(uint64(time.Now().Unix()))
-	benchmarks := []struct {
-		name  string
-		scale scaler
-	}{
-		{name: "k1", scale: &K1{}},
-	}
+	b.ReportAllocs()
 	for _, bm := range benchmarks {
+		bm := bm
 		b.Run(bm.name, func(b *testing.B) {
-			td := NewWithDecay(benchmarkCompression, benchmarkDecayValue, benchmarkDecayEvery)
-			for i := 0; i < b.N; i++ {
-				td.Add(math.Abs(rand.NormFloat64()), 1.0)
-			}
+			_ = getTd(bm.scale, b)
+		})
+	}
+}
+
+func getTd(scale scaler, b *testing.B) *TDigest {
+	td := NewWithDecay(benchmarkCompression, benchmarkDecayValue, benchmarkDecayEvery)
+	data := getData(b)
+	td.Scaler = scale
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		td.Add(data[i], 1.0)
+	}
+	return td
+}
+
+func BenchmarkMainQuantile(b *testing.B) {
+	rand.Seed(uint64(time.Now().Unix()))
+	for _, bm := range benchmarks {
+		bm := bm
+		b.Run(bm.name, func(b *testing.B) {
+			td := getTd(bm.scale, b)
 			b.ResetTimer()
 			b.ReportAllocs()
 
@@ -330,26 +262,112 @@ func BenchmarkQuantile(b *testing.B) {
 	}
 }
 
-func BenchmarkCDF(b *testing.B) {
+func BenchmarkMainCDF(b *testing.B) {
 	rand.Seed(uint64(time.Now().Unix()))
-	benchmarks := []struct {
-		name  string
-		scale scaler
-	}{
-		{name: "k1", scale: &K1{}},
-	}
 	for _, bm := range benchmarks {
+		bm := bm
 		b.Run(bm.name, func(b *testing.B) {
-			td := NewWithDecay(benchmarkCompression, benchmarkDecayValue, benchmarkDecayEvery)
-			for i := 0; i < b.N; i++ {
-				td.Add(math.Abs(rand.NormFloat64()), 1.0)
-			}
+			td := getTd(bm.scale, b)
 			b.ResetTimer()
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
-				td.CDF(math.Abs(rand.NormFloat64()))
+				td.CDF(getVal())
 			}
 		})
 	}
+}
+
+func BenchmarkCompression(b *testing.B) {
+	benchmarks := []struct {
+		compression int
+	}{
+		{1000},
+		{500},
+		{250},
+		{125},
+		{100},
+		{50},
+	}
+	for _, bm := range benchmarks {
+		bm := bm
+		b.Run("Compression "+strconv.Itoa(bm.compression), func(b *testing.B) {
+			b.ReportAllocs()
+			td := NewWithDecay(float64(bm.compression), benchmarkDecayValue, benchmarkDecayEvery)
+			data := make([]float64, b.N)
+			for i := 0; i < b.N; i++ {
+				data[i] = getVal()
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				td.Add(data[i], 1.0)
+			}
+			q := td.Quantile(0.99)
+			b.StopTimer()
+			actual := quantile(0.99, data)
+			fmt.Println("\n", "proc", len(td.processed), cap(td.processed), "unproc", cap(td.unprocessed), td.maxProcessed, q, actual, math.Abs(q-actual))
+		})
+	}
+}
+
+func BenchmarkMultipleHistos(b *testing.B) {
+	benchmarks := []struct {
+		name string
+		size int64
+	}{
+		{name: "10", size: 10},
+		{name: "100", size: 100},
+		{name: "1000", size: 1000},
+		{name: "10000", size: 10000},
+		{name: "100000", size: 100000},
+	}
+	for _, bm := range benchmarks {
+		bm := bm
+		b.Run(bm.name+"-double", func(b *testing.B) {
+			data := getData(b)
+			b.ReportAllocs()
+			td := NewWithDecay(benchmarkCompression, benchmarkDecayValue, benchmarkDecayEvery)
+			td2 := NewWithDecay(benchmarkCompression, benchmarkDecayValue, benchmarkDecayEvery)
+			for i := 0; i < b.N; i++ {
+				td.Add(data[i], 1)
+				td2.Add(data[i], 1)
+				if int64(i)%bm.size == 0 {
+					td2.Clear()
+				}
+			}
+		})
+		b.Run(bm.name+"-merge", func(b *testing.B) {
+			data := getData(b)
+			b.ReportAllocs()
+			td := NewWithDecay(benchmarkCompression, benchmarkDecayValue, benchmarkDecayEvery)
+			td2 := NewWithDecay(benchmarkCompression, benchmarkDecayValue, benchmarkDecayEvery)
+			for i := 0; i < b.N; i++ {
+				td2.Add(data[i], 1)
+				if int64(i)%bm.size == 0 && i != 0 {
+					td.AddCentroidList(td2.Centroids())
+					td2.Clear()
+				}
+			}
+			if td2.Centroids().Len() > 0 {
+				td.AddCentroidList(td2.Centroids())
+			}
+		})
+		b.Run(bm.name+"-regular", func(b *testing.B) {
+			data := getData(b)
+			b.ReportAllocs()
+			td := NewWithDecay(benchmarkCompression, benchmarkDecayValue, benchmarkDecayEvery)
+			for i := 0; i < b.N; i++ {
+				td.Add(data[i], 1)
+			}
+		})
+	}
+}
+
+func getData(b *testing.B) []float64 {
+	data := make([]float64, b.N)
+	for i := 0; i < b.N; i++ {
+		data[i] = getVal()
+	}
+	b.ResetTimer()
+	return data
 }

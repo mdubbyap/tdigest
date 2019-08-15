@@ -56,6 +56,7 @@ func TestCentroid_Add(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			c := &tt.c
 			if err := c.Add(tt.r); (err != nil) != tt.wantErr {
@@ -113,6 +114,7 @@ func TestNewCentroidList(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tdigest.NewCentroidList(tt.centroids); !cmp.Equal(tt.want, got) {
 				t.Errorf("NewCentroidList() = -want/+got %s", cmp.Diff(tt.want, got))
